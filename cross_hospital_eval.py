@@ -68,8 +68,6 @@ if __name__ == "__main__":
     evaluate(args.model, args.data)
 
 """
-python cross_hospital_eval.py \
---model local_models/hospital_1_update_10.pt \
---data fedpc_bloodmnist_npz/hospital_2/val.npz
+ python cross_hospital_eval.py --model local_models/hospital_3_update_3.pt  --data fedpc_bloodmnist_npz/hospital_1/val.npz
 
 """

@@ -36,14 +36,8 @@ for r in range(ROUNDS):
     torch.save(model.state_dict(), model_path)
     print(f"[{hospital}] 💾 Local model saved -> {model_path}")
 
-    print(f"[{hospital}] 📡 Sending prototypes:")
-
-    for cls, proto in local_protos.items():
-        print(
-            f"   class {cls} -> "
-            f"shape {tuple(proto.shape)} "
-            f"norm {proto.norm().item():.4f}"
-        )
+    
+        
 
     print(f"[{hospital}] 📊 Model weight summary:")
 
@@ -54,6 +48,13 @@ for r in range(ROUNDS):
         )
 
     local_protos = build_prototypes(model, dl)
+    print(f"[{hospital}] 📡 Sending prototypes:")
+
+    for cls, proto in local_protos.items():
+        print(
+            f"   class {cls} -> "
+            f"shape {tuple(proto.shape)} "
+            f"norm {proto.norm().item():.4f}" )
     sock.sendall(pickle.dumps(local_protos))
 
     global_protos = pickle.loads(sock.recv(10_000_000))
