@@ -3,17 +3,16 @@ import pickle
 import sys
 import torch
 import os
-import time
 
 from hospital.config import *
-from hospital.config import ROUNDS
 from hospital.model import CNN
 from hospital.dataset import NPZDataset
 from hospital.local_train import train
 from hospital.prototype import build_prototypes
+from hospital.logger import ClientLogger
 
 hospital = sys.argv[1]
-print(f"🏥 {hospital} started (ASYNC)")
+logger = ClientLogger(hospital)
 
 ds = NPZDataset(f"fedpc_bloodmnist_npz/{hospital}/train.npz")
 dl = torch.utils.data.DataLoader(ds, BATCH_SIZE, shuffle=True)
@@ -23,42 +22,40 @@ model = CNN(len(ds.classes), device=device)
 opt = torch.optim.Adam(model.parameters(), lr=1e-3)
 os.makedirs("local_models", exist_ok=True)
 
-print(f"Connecting to server at {SERVER_HOST}:{SERVER_PORT}...")
 sock = socket.socket()
 sock.connect((SERVER_HOST, SERVER_PORT))
-print("Connected to server!")
+
+# Handshake
+sock.sendall(pickle.dumps(hospital))
+ack = pickle.loads(sock.recv(1024))
+if ack != "ACK":
+    raise RuntimeError("Server handshake failed")
+
 global_protos = {}
+
 for r in range(ROUNDS):
-    acc = train(model, dl, opt, global_protos, LAMBDA_PROTO)
-    print(f"[{hospital}] Local Acc: {acc:.2f}%")
+    lam = min(LAMBDA_PROTO, 0.5 * (r + 1))
+    logger.round_start(r, ROUNDS, lam)
 
-    model_path = f"local_models/{hospital}_update_{r}.pt"
+    acc = train(model, dl, opt, global_protos, lam)
+    logger.train_result(acc)
+
+    model_path = f"local_models/{hospital}_round_{r}.pt"
     torch.save(model.state_dict(), model_path)
-    print(f"[{hospital}] 💾 Local model saved -> {model_path}")
+    logger.model_saved(model_path)
 
-    
-        
-
-    print(f"[{hospital}] 📊 Model weight summary:")
-
-    for name, param in model.named_parameters():
-        print(
-            f"   {name} | mean={param.data.mean():.4f} "
-            f"std={param.data.std():.4f}"
-        )
-
+    # Build prototypes and log full weight detail before sending
     local_protos = build_prototypes(model, dl)
-    print(f"[{hospital}] 📡 Sending prototypes:")
+    logger.log_sending_protos(local_protos)
 
-    for cls, proto in local_protos.items():
-        print(
-            f"   class {cls} -> "
-            f"shape {tuple(proto.shape)} "
-            f"norm {proto.norm().item():.4f}" )
     sock.sendall(pickle.dumps(local_protos))
 
+    # Receive and log full weight detail of what server returned
     global_protos = pickle.loads(sock.recv(10_000_000))
+    logger.log_received_protos(global_protos)
 
+    # Log per-class drift: how far did the server move each prototype?
+    logger.log_proto_delta(local_protos, global_protos)
 
-
-    
+sock.close()
+logger.training_complete()

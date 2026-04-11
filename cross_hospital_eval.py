@@ -4,49 +4,95 @@ import argparse
 
 from hospital.model import CNN
 from hospital.dataset import NPZDataset
+from hospital.prototype import build_prototypes
 
 
-def evaluate(model_path, data_path):
+def load_encoder(model, model_path, device):
+    """
+    Load only encoder weights (ignore classifier head)
+    """
+    state_dict = torch.load(model_path, map_location=device)
+
+    # Remove classifier (fc) weights
+    state_dict = {k: v for k, v in state_dict.items() if "fc" not in k}
+
+    model.load_state_dict(state_dict, strict=False)
+    return model
+
+
+def evaluate(model_path, train_data_path, test_data_path):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    print("Loading model:", model_path)
-    print("Evaluating on dataset:", data_path)
+    print("🔍 Cross-Hospital Evaluation")
+    print("----------------------------------")
+    print(f"Model from      : {model_path}")
+    print(f"Prototype built : {train_data_path}")
+    print(f"Test dataset    : {test_data_path}")
+    print("----------------------------------")
 
-    # Load dataset
-    dataset = NPZDataset(data_path)
-    loader = DataLoader(dataset, batch_size=128, shuffle=False)
+    # ✅ Load dataset for prototype building (source hospital)
+    train_dataset = NPZDataset(train_data_path)
+    train_loader = DataLoader(train_dataset, batch_size=128, shuffle=False)
 
-    # Load model
-    model = CNN(len(dataset.classes))
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    # ✅ Load dataset for evaluation (target hospital)
+    test_dataset = NPZDataset(test_data_path)
+    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+
+    # ✅ Build model
+    model = CNN(num_classes=1)  # classifier not used
+    model = load_encoder(model, model_path, device)
     model.to(device)
     model.eval()
+
+    # ✅ Build prototypes from source hospital
+    print("\n📦 Building source prototypes...")
+    global_protos = build_prototypes(model, train_loader)
+
+    for cls, proto in global_protos.items():
+        print(f"   class {cls} -> norm {proto.norm().item():.4f}")
+
+    # ✅ Evaluate using prototype similarity
+    print("\n🧪 Evaluating on target hospital...")
 
     correct = 0
     total = 0
 
     with torch.no_grad():
-        for x, yl, yg in loader:
+        for x, _, yg in test_loader:
             x = x.to(device)
-            yl = yl.to(device)
+            yg = yg.to(device)
 
-            outputs = model(x)
-            preds = outputs.argmax(dim=1)
+            _, feats = model(x, return_feat=True)
 
-            correct += (preds == yl).sum().item()
-            total += yl.size(0)
+            preds = []
+            for f in feats:
+                sims = {}
 
-    acc = 100 * correct / total
-    print("\nCross-hospital evaluation result")
-    print("---------------------------------")
+                for cls, proto in global_protos.items():
+                    sims[cls] = torch.cosine_similarity(
+                        f, proto.to(device), dim=0
+                    )
+
+                pred = max(sims, key=sims.get)
+                preds.append(pred)
+
+            preds = torch.tensor(preds, device=device)
+
+            correct += (preds == yg).sum().item()
+            total += yg.size(0)
+
+    acc = 100.0 * correct / total
+
+    print("\n📊 RESULT")
+    print("----------------------------------")
     print(f"Samples evaluated : {total}")
     print(f"Accuracy          : {acc:.2f}%")
+    print("----------------------------------")
 
     return acc
 
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -57,17 +103,19 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--data",
+        "--source",
         type=str,
         required=True,
-        help="Validation dataset of another hospital"
+        help="Source hospital TRAIN dataset (for prototypes)"
+    )
+
+    parser.add_argument(
+        "--target",
+        type=str,
+        required=True,
+        help="Target hospital TEST/VAL dataset"
     )
 
     args = parser.parse_args()
 
-    evaluate(args.model, args.data)
-
-"""
- python cross_hospital_eval.py --model local_models/hospital_3_update_3.pt  --data fedpc_bloodmnist_npz/hospital_1/val.npz
-
-"""
+    evaluate(args.model, args.source, args.target)
