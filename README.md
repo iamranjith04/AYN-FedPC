@@ -47,7 +47,4 @@ Each hospital runs the full training loop independently. The flow per round is:
 
 **To evaluate Cross validation after Training:** 
 
-    python cross_hospital_eval.py \
-    --model local_models/hospital_1_update_10.pt \
-    --source fedpc_bloodmnist_npz/hospital_1/train.npz \
-    --target fedpc_bloodmnist_npz/hospital_2/val.npz
+    python cross_hospital_eval.py --model local_models/hospital_1_round_9.pt --source fedpc_bloodmnist_npz/hospital_1/train.npz --target fedpc_bloodmnist_npz/hospital_3/val.npz
